@@ -8,6 +8,12 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::thread;
 
+use opencv::{core, highgui, imgproc, prelude::*};
+
+const WIN: &str = "lidar";
+const IMG_SIZE: i32 = 800;      // square window, pixels
+const RANGE_M: f32 = 100.0;     // half-width of the view in cm (center to edge)
+
 fn log_imu_thread(path: &str, sample_count: usize) {
     let mut imu_dev = lidar_imu_open().unwrap();
     let mut out = BufWriter::new(File::create(path).unwrap());
@@ -81,6 +87,65 @@ fn main_read_test() {
     }
 }
 
+
+fn main_openCV() -> opencv::Result<()> {
+
+    let mut pcd_dev = lidar_pcd_open().unwrap();
+
+    highgui::named_window(WIN, highgui::WINDOW_AUTOSIZE)?;
+
+    // Allocate once, reuse every frame
+    let mut img = core::Mat::new_rows_cols_with_default(
+        IMG_SIZE,
+        IMG_SIZE,
+        core::CV_8UC3,
+        core::Scalar::all(0.0),
+    )?;
+
+    let scale = (IMG_SIZE as f32 / 2.0) / RANGE_M; // pixels per meter
+    let c = IMG_SIZE as f32 / 2.0;
+
+    loop {
+        let points = lidar_pcd_capture(&mut pcd_dev).unwrap();
+
+        // Clear frame
+        img.set_to(&core::Scalar::all(0.0), &core::no_array())?;
+
+        // Draw range rings every 10 cm for reference
+        for r in (10..=RANGE_M as i32).step_by(10) {
+            imgproc::circle(
+                &mut img,
+                core::Point::new(c as i32, c as i32),
+                (r as f32 * scale) as i32,
+                core::Scalar::new(60.0, 60.0, 60.0, 0.0),
+                1,
+                imgproc::LINE_8,
+                0,
+            )?;
+        }
+
+        // Plot points: X forward = up on screen, Y left = left on screen
+        for &[x, y, _z] in &points {
+            let px = (c - y * scale) as i32;
+            let py = (c - x * scale) as i32;
+            if px >= 0 && px < IMG_SIZE && py >= 0 && py < IMG_SIZE {
+                *img.at_2d_mut::<core::Vec3b>(py, px)? = core::Vec3b::from([0, 255, 0]);
+            }
+        }
+
+        highgui::imshow(WIN, &img)?;
+
+        // Required for the window to refresh; also handles quit
+        let key = highgui::wait_key(1)?;
+        if key == 27 || key == b'q' as i32 {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 fn main() {
     println!("Livox360 test code");
+    main_openCV();
 }
