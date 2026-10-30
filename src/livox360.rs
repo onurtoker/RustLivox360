@@ -8,6 +8,10 @@ const PCD_PACKET_BUF_SIZE: usize = 1380;
 const PCD_PORT: u16 = 56301;
 pub const PCD_UDP_COUNT: usize = 209;
 
+// Number of points in a single UDP packet, number of bytes used for a single point
+const POINT_COUNT: usize = 96;
+const POINT_SIZE: usize = 14;
+
 /// Handle to an open lidar IMU stream.
 pub struct LidarImu {
     sock: UdpSocket,
@@ -118,9 +122,6 @@ fn parse_pcd_packet(data: &[u8]) -> Option<PcdSample> {
 
     let pcd_bytes = &data[36..];
 
-    const POINT_SIZE: usize = 14;
-    const POINT_COUNT: usize = 96;
-
     let mut points: Vec<[f32; 3]> = Vec::with_capacity(POINT_COUNT);
     //let mut r_values: Vec<f32> = Vec::with_capacity(POINT_COUNT);
 
@@ -136,4 +137,27 @@ fn parse_pcd_packet(data: &[u8]) -> Option<PcdSample> {
 
     Some(PcdSample { time_stamp, pcd:points })
 
+}
+
+pub fn lidar_pcd_capture(dev: &mut LidarPcd) -> io::Result<Vec<[f32; 3]>> {
+    let mut points = Vec::with_capacity(PCD_UDP_COUNT * POINT_COUNT);
+    let mut packets = 0;
+
+    while packets < PCD_UDP_COUNT {
+        let len = dev.sock.recv(&mut dev.buf)?;
+        if len < 36 {
+            continue; // too short, skip without counting
+        }
+
+        for c in dev.buf[36..len].chunks_exact(POINT_SIZE).take(POINT_COUNT)
+        {
+            let x = i32::from_le_bytes(c[0..4].try_into().unwrap());
+            let y = i32::from_le_bytes(c[4..8].try_into().unwrap());
+            let z = i32::from_le_bytes(c[8..12].try_into().unwrap());
+            points.push([x as f32 / 10.0, y as f32 / 10.0, z as f32 / 10.0]);
+        }
+        packets += 1;
+    }
+
+    Ok(points)
 }
